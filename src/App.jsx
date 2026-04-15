@@ -295,7 +295,7 @@ const squareAPI = {
 };
 
 // ── Tracker — 5 minutes per step ─────────────────────────────────────────────
-const TRACKER_INTERVAL = 300000; // 5 minutes per step
+const TRACKER_INTERVAL = 5 * 60 * 1000; // exactly 5 minutes per step
 
 const TRACKER = {
   pickup: [
@@ -435,23 +435,33 @@ export default function SherellesApp() {
   });
 
   const placeOrder = async () => {
+    // ── Validation ──────────────────────────────────────────────────────────
+    if (!form.name.trim()) { alert("Please enter your full name."); return; }
+    if (!form.phone.trim()) { alert("Please enter your phone number."); return; }
+    if (orderType === "delivery" && !form.address.trim()) { alert("Please enter your delivery address."); return; }
+    if (orderType === "catering" && !form.address.trim()) { alert("Please enter your event address."); return; }
+    if (!sqCard) { alert("Payment form is still loading. Please wait a moment and try again."); return; }
+
     setStep(3); setProcMsg("Verifying payment details...");
-    // Tokenize card via Square Web Payments SDK
-    let sourceId = "EXTERNAL";
-    if (sqCard) {
-      try {
-        const result = await sqCard.tokenize();
-        if (result.status === "OK") {
-          sourceId = result.token;
-        } else {
-          setStep(2);
-          alert("Payment error: " + (result.errors?.[0]?.message || "Please check your card details"));
-          return;
-        }
-      } catch (err) {
-        console.error("Tokenize error:", err);
+
+    // ── Tokenize card via Square Web Payments SDK ───────────────────────────
+    let sourceId = null;
+    try {
+      const result = await sqCard.tokenize();
+      if (result.status === "OK") {
+        sourceId = result.token;
+      } else {
+        setStep(2);
+        const msg = result.errors?.map(e => e.message).join(", ") || "Please check your card details.";
+        alert("Payment error: " + msg);
+        return;
       }
+    } catch (err) {
+      setStep(2);
+      alert("Payment form error. Please refresh and try again.");
+      return;
     }
+
     setProcMsg("Sending order to Square POS...");
     const o = await squareAPI.submitOrder(cart, orderType, total, form); setSqOrderId(o.orderId);
     setProcMsg("Processing payment securely via Square...");
@@ -657,7 +667,11 @@ export default function SherellesApp() {
         {/* Square card form */}
         <div style={{ marginBottom: 12 }}>
           <label style={{ display: "block", fontSize: 10, color: C.muted, marginBottom: 8, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: "'Bebas Neue', sans-serif" }}>CARD DETAILS</label>
-          <div id="sq-card-container" style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.cardBorder}`, padding: "4px" }} />
+          <div id="sq-card-container" style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.cardBorder}`, padding: "12px", minHeight: 80 }}>
+            {!sqCard && <div style={{ fontSize: 11, color: C.muted, textAlign: "center", padding: "20px 0", fontFamily: "monospace" }}>
+              {typeof window !== "undefined" && window.Square ? "Initializing secure card form..." : "Loading Square payment SDK..."}
+            </div>}
+          </div>
         </div>
 
         <div style={{ padding: "10px 13px", background: "#0A1A0A", borderRadius: 10, border: "1px solid #1A3A1A", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
@@ -679,7 +693,9 @@ export default function SherellesApp() {
         </div>
       </div>
       <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "calc(min(430px,100vw))", zIndex: 40, padding: "12px 14px 16px", background: "linear-gradient(to top, #0A0A0A 80%, transparent)" }}>
-        <button onClick={placeOrder} style={{ width: "100%", padding: 14, border: "none", borderRadius: 12, cursor: "pointer", background: C.red, color: C.cream, fontSize: 16, fontWeight: 700, boxShadow: `0 6px 24px ${C.redGlow}`, fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.1em" }}>PAY {fmt(total)}</button>
+        <button onClick={placeOrder} disabled={!sqCard} style={{ width: "100%", padding: 14, border: "none", borderRadius: 12, cursor: sqCard ? "pointer" : "not-allowed", background: sqCard ? C.red : "#444", color: C.cream, fontSize: 16, fontWeight: 700, boxShadow: sqCard ? `0 6px 24px ${C.redGlow}` : "none", fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.1em", transition: "all 0.3s" }}>
+          {sqCard ? `PAY ${fmt(total)}` : "LOADING PAYMENT FORM..."}
+        </button>
       </div>
     </div>
   );
