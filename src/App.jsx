@@ -190,11 +190,105 @@ const CATS = Object.keys(MENU);
 // Categories that DON'T need kitchen tracker
 const NO_TRACKER_CATS = ["🧀 Sides", "🍰 Cakes & Desserts", "🥤 Drinks", "🎉 Catering"];
 
-// ── Square API Sim ────────────────────────────────────────────────────────────
+// ── Square Web Payments SDK Hook ──────────────────────────────────────────────
+const SQUARE_APP_ID = process.env.REACT_APP_SQUARE_APP_ID;
+const SQUARE_LOCATION_ID = process.env.REACT_APP_SQUARE_LOCATION;
+
+function useSquarePayments(active) {
+  const [card, setCard] = useState(null);
+  const [sqLoaded, setSqLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!active) return;
+    const script = document.createElement("script");
+    script.src = "https://web.squarecdn.com/v1/square.js";
+    script.onload = () => setSqLoaded(true);
+    document.head.appendChild(script);
+    return () => { try { document.head.removeChild(script); } catch {} };
+  }, [active]);
+
+  useEffect(() => {
+    if (!sqLoaded || !active) return;
+    async function initSquare() {
+      try {
+        const payments = window.Square.payments(SQUARE_APP_ID, SQUARE_LOCATION_ID);
+        const cardPayment = await payments.card({
+          style: {
+            ".input-container": { borderColor: "#252525", borderRadius: "8px" },
+            ".input-container.is-focus": { borderColor: "#C8102E" },
+            input: { color: "#FFFFFF" },
+            "input::placeholder": { color: "#444" },
+          }
+        });
+        await cardPayment.attach("#sq-card-container");
+        setCard(cardPayment);
+        // Apple Pay
+        try {
+          const req = payments.paymentRequest({ countryCode: "US", currencyCode: "USD", total: { amount: "0.00", label: "Sherelle's" } });
+          const ap = await payments.applePay(req);
+          await ap.attach("#sq-apple-pay");
+        } catch {}
+        // Google Pay
+        try {
+          const req = payments.paymentRequest({ countryCode: "US", currencyCode: "USD", total: { amount: "0.00", label: "Sherelle's" } });
+          const gp = await payments.googlePay(req);
+          await gp.attach("#sq-google-pay");
+        } catch {}
+      } catch (err) { console.error("Square init:", err); }
+    }
+    initSquare();
+  }, [sqLoaded, active]);
+
+  return card;
+}
+
+// ── Backend API (Railway) ─────────────────────────────────────────────────────
+const BACKEND = "https://sherelles-backend-production.up.railway.app";
+
 const squareAPI = {
-  async connect() { await new Promise(r => setTimeout(r, 900)); return true; },
-  async submitOrder() { await new Promise(r => setTimeout(r, 1100)); return { orderId: "SQ-" + Math.random().toString(36).substr(2, 9).toUpperCase() }; },
-  async processPayment() { await new Promise(r => setTimeout(r, 1300)); return { paymentId: "PAY-" + Math.random().toString(36).substr(2, 9).toUpperCase() }; },
+  async connect() {
+    try {
+      const res = await fetch(`${BACKEND}/verify`);
+      const data = await res.json();
+      return data.connected;
+    } catch { return false; }
+  },
+
+  async submitOrder(cart, orderType, total, form) {
+    try {
+      const lineItems = Object.entries(cart)
+        .filter(([, q]) => q > 0)
+        .map(([id, qty]) => {
+          const item = Object.values(MENU).flat().find(i => i.id === id);
+          return { name: item?.name || id, quantity: qty, price: item?.price || 0 };
+        });
+      const res = await fetch(`${BACKEND}/create-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lineItems, orderType, form }),
+      });
+      const data = await res.json();
+      return { orderId: data.orderId || "SQ-ERROR" };
+    } catch (err) {
+      console.error("Order error:", err);
+      return { orderId: "SQ-ERROR" };
+    }
+  },
+
+  async processPayment(total, orderId, sourceId, form) {
+    try {
+      const res = await fetch(`${BACKEND}/process-payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceId: sourceId || "EXTERNAL", amount: total, orderId, form }),
+      });
+      const data = await res.json();
+      return { paymentId: data.paymentId || "PAY-ERROR", receiptUrl: data.receiptUrl };
+    } catch (err) {
+      console.error("Payment error:", err);
+      return { paymentId: "PAY-ERROR" };
+    }
+  },
 };
 
 // ── Tracker (5 min per step in prod = 300000ms; demo uses 5s) ─────────────────
@@ -305,13 +399,14 @@ export default function SherellesApp() {
   const [orderType, setOrderType] = useState("pickup");
   const [cart, setCart] = useState({});
   const [step, setStep] = useState(0);
-  const [activeTab, setActiveTab] = useState("order"); // order | info
-  const [form, setForm] = useState({ name: "", phone: "", address: "", card: "", special: "" });
+  const [activeTab, setActiveTab] = useState("order");
+  const [form, setForm] = useState({ name: "", phone: "", address: "", special: "" });
   const [sqOrderId, setSqOrderId] = useState(null);
   const [sqPayId, setSqPayId] = useState(null);
   const [procMsg, setProcMsg] = useState("");
   const [trackerStep, setTrackerStep] = useState(0);
   const [orderNum] = useState(() => Math.floor(10000 + Math.random() * 90000));
+  const sqCard = useSquarePayments(step === 2);
 
   useEffect(() => { squareAPI.connect().then(() => setConnected(true)); }, []);
 
@@ -338,10 +433,27 @@ export default function SherellesApp() {
   });
 
   const placeOrder = async () => {
-    setStep(3); setProcMsg("Sending order to Square POS...");
-    const o = await squareAPI.submitOrder(); setSqOrderId(o.orderId);
+    setStep(3); setProcMsg("Verifying payment details...");
+    // Tokenize card via Square Web Payments SDK
+    let sourceId = "EXTERNAL";
+    if (sqCard) {
+      try {
+        const result = await sqCard.tokenize();
+        if (result.status === "OK") {
+          sourceId = result.token;
+        } else {
+          setStep(2);
+          alert("Payment error: " + (result.errors?.[0]?.message || "Please check your card details"));
+          return;
+        }
+      } catch (err) {
+        console.error("Tokenize error:", err);
+      }
+    }
+    setProcMsg("Sending order to Square POS...");
+    const o = await squareAPI.submitOrder(cart, orderType, total, form); setSqOrderId(o.orderId);
     setProcMsg("Processing payment securely via Square...");
-    const p = await squareAPI.processPayment(); setSqPayId(p.paymentId);
+    const p = await squareAPI.processPayment(total, o.orderId, sourceId, form); setSqPayId(p.paymentId);
     if (needsTracker) {
       setProcMsg("Notifying kitchen..."); await new Promise(r => setTimeout(r, 600));
       setTrackerStep(0); setStep(4);
@@ -505,21 +617,28 @@ export default function SherellesApp() {
     </div>
   );
 
-  // ── STEP 2: Checkout ────────────────────────────────────────────────────────
+  // ── STEP 2: Checkout with Square Web Payments ──────────────────────────────
   if (step === 2) return (
     <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 430, margin: "0 auto", fontFamily: "'Oswald', sans-serif" }}>
       <FontLoader />
+      <style>{`
+        #sq-card-container .sq-card-wrapper { background: #141414 !important; border-radius: 10px; border: 1px solid #252525; }
+        #sq-card-container input { color: #fff !important; background: #141414 !important; }
+        #sq-card-container label { color: #888 !important; font-family: 'Bebas Neue', sans-serif !important; letter-spacing: 0.1em !important; }
+        #sq-apple-pay, #sq-google-pay { border-radius: 10px !important; margin-bottom: 8px !important; }
+      `}</style>
       <AppHeader step={2} total={total} totalItems={totalItems} onBack={() => setStep(1)} connected={connected} />
       <div style={{ padding: "14px 14px 130px" }}>
         <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, color: C.cream, letterSpacing: "0.1em", marginBottom: 4 }}>CHECKOUT</div>
         <div style={{ fontSize: 10, color: C.muted, marginBottom: 16, fontFamily: "monospace", letterSpacing: "0.12em" }}>
           {orderType === "pickup" ? `🏪 PICKUP · ${BIZ.address}` : orderType === "delivery" ? "🚗 DELIVERY DETAILS" : "🎉 CATERING REQUEST"}
         </div>
+
+        {/* Customer details */}
         {[
           { k: "name", label: "Full Name", ph: "Your full name" },
           { k: "phone", label: "Phone Number", ph: BIZ.phone },
           ...(orderType !== "pickup" ? [{ k: "address", label: orderType === "catering" ? "Event Address" : "Delivery Address", ph: "Street, City, State, ZIP" }] : []),
-          { k: "card", label: "Card Number (Square)", ph: "4242 4242 4242 4242" },
           { k: "special", label: "Special Instructions", ph: "Sauce preferences, allergies, extra pickles..." },
         ].map(f => (
           <div key={f.k} style={{ marginBottom: 12 }}>
@@ -528,11 +647,26 @@ export default function SherellesApp() {
               style={{ width: "100%", padding: "11px 13px", background: C.card, border: `1px solid ${C.cardBorder}`, borderRadius: 10, color: C.cream, fontSize: 14, outline: "none", fontFamily: "'Oswald', sans-serif" }} />
           </div>
         ))}
-        <div style={{ padding: "10px 13px", background: "#0A1A0A", borderRadius: 10, border: "1px solid #1A3A1A", marginBottom: 12 }}>
-          <div style={{ fontSize: 9, color: "#5CB05C", fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.15em", marginBottom: 3 }}>■ SQUARE SECURE PAYMENT</div>
-          <div style={{ fontSize: 11, color: "#4A7A4A" }}>Encrypted & processed by Square. Card details never stored on our servers.</div>
+
+        {/* Apple Pay / Google Pay buttons */}
+        <div id="sq-apple-pay" style={{ marginBottom: 8 }} />
+        <div id="sq-google-pay" style={{ marginBottom: 12 }} />
+
+        {/* Square card form */}
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: "block", fontSize: 10, color: C.muted, marginBottom: 8, letterSpacing: "0.15em", textTransform: "uppercase", fontFamily: "'Bebas Neue', sans-serif" }}>CARD DETAILS</label>
+          <div id="sq-card-container" style={{ background: C.card, borderRadius: 10, border: `1px solid ${C.cardBorder}`, padding: "4px" }} />
         </div>
-        <div style={{ background: C.card, borderRadius: 10, padding: "11px 13px", border: `1px solid ${C.cardBorder}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+
+        <div style={{ padding: "10px 13px", background: "#0A1A0A", borderRadius: 10, border: "1px solid #1A3A1A", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 14 }}>🔒</span>
+          <div>
+            <div style={{ fontSize: 9, color: "#5CB05C", fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.15em", marginBottom: 2 }}>SQUARE SECURE PAYMENT</div>
+            <div style={{ fontSize: 11, color: "#4A7A4A" }}>256-bit encrypted. Card details never stored.</div>
+          </div>
+        </div>
+
+        <div style={{ background: C.card, borderRadius: 10, padding: "11px 13px", border: `1px solid ${C.cardBorder}`, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <div>
             <div style={{ fontSize: 10, color: C.muted, fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.1em" }}>ORDER TOTAL</div>
             <div style={{ fontSize: 20, fontWeight: 700, color: C.gold, fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.05em" }}>{fmt(total)}</div>
@@ -543,7 +677,7 @@ export default function SherellesApp() {
         </div>
       </div>
       <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "calc(min(430px,100vw))", zIndex: 40, padding: "12px 14px 16px", background: "linear-gradient(to top, #0A0A0A 80%, transparent)" }}>
-        <button onClick={placeOrder} style={{ width: "100%", padding: 14, border: "none", borderRadius: 12, cursor: "pointer", background: C.red, color: C.cream, fontSize: 16, fontWeight: 700, boxShadow: `0 6px 24px ${C.redGlow}`, fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.1em" }}>PLACE ORDER VIA SQUARE · {fmt(total)}</button>
+        <button onClick={placeOrder} style={{ width: "100%", padding: 14, border: "none", borderRadius: 12, cursor: "pointer", background: C.red, color: C.cream, fontSize: 16, fontWeight: 700, boxShadow: `0 6px 24px ${C.redGlow}`, fontFamily: "'Bebas Neue', sans-serif", letterSpacing: "0.1em" }}>PAY {fmt(total)}</button>
       </div>
     </div>
   );
