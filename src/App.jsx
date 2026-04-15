@@ -211,6 +211,9 @@ function useSquarePayments(active) {
     if (!sqLoaded || !active) return;
     async function initSquare() {
       try {
+        if (!window.Square) { console.error("Square SDK not loaded"); return; }
+        if (!SQUARE_APP_ID) { console.error("Missing REACT_APP_SQUARE_APP_ID"); return; }
+        if (!SQUARE_LOCATION_ID) { console.error("Missing REACT_APP_SQUARE_LOCATION"); return; }
         const payments = window.Square.payments(SQUARE_APP_ID, SQUARE_LOCATION_ID);
         const cardPayment = await payments.card({
           style: {
@@ -291,9 +294,8 @@ const squareAPI = {
   },
 };
 
-// ── Tracker (5 min per step in prod = 300000ms; demo uses 5s) ─────────────────
-// TRACKER_INTERVAL should be 300000 (5 min) in production
-const TRACKER_INTERVAL = 5000; // demo only — change to 300000 for production
+// ── Tracker — 5 minutes per step ─────────────────────────────────────────────
+const TRACKER_INTERVAL = 300000; // 5 minutes per step
 
 const TRACKER = {
   pickup: [
