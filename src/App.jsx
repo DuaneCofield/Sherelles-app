@@ -191,8 +191,8 @@ const CATS = Object.keys(MENU);
 const NO_TRACKER_CATS = ["🧀 Sides", "🍰 Cakes & Desserts", "🥤 Drinks", "🎉 Catering"];
 
 // ── Square Web Payments SDK Hook ──────────────────────────────────────────────
-const SQUARE_APP_ID = process.env.REACT_APP_SQUARE_APP_ID;
-const SQUARE_LOCATION_ID = process.env.REACT_APP_SQUARE_LOCATION;
+const SQUARE_APP_ID = "sandbox-sq0idb-VI2PYd6SXMYApWuMFYcS0Q";
+const SQUARE_LOCATION_ID = "L7QKZ6JPN5J2F";
 
 function useSquarePayments(active) {
   const [card, setCard] = useState(null);
@@ -201,7 +201,7 @@ function useSquarePayments(active) {
   useEffect(() => {
     if (!active) return;
     const script = document.createElement("script");
-    script.src = "https://web.squarecdn.com/v1/square.js";
+    script.src = "https://sandbox.web.squarecdn.com/v1/square.js";
     script.onload = () => setSqLoaded(true);
     document.head.appendChild(script);
     return () => { try { document.head.removeChild(script); } catch {} };
