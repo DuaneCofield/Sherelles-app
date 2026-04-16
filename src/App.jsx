@@ -292,6 +292,24 @@ const squareAPI = {
       return { paymentId: "PAY-ERROR" };
     }
   },
+
+  async fetchCatalogImages() {
+    try {
+      const res = await fetch(`${BACKEND}/catalog`);
+      const data = await res.json();
+      // Build a name->imageUrl map for matching with our menu
+      const imageMap = {};
+      for (const item of data.items || []) {
+        if (item.imageUrl) {
+          imageMap[item.name?.toLowerCase().trim()] = item.imageUrl;
+        }
+      }
+      return imageMap;
+    } catch (err) {
+      console.error("Catalog fetch error:", err);
+      return {};
+    }
+  },
 };
 
 // ── Tracker — 5 minutes per step ─────────────────────────────────────────────
@@ -355,10 +373,15 @@ function AppHeader({ step, total, totalItems, onCartClick, onBack, connected }) 
 }
 
 // ── Item Card ─────────────────────────────────────────────────────────────────
-function ItemCard({ item, qty, onAdd, onRemove }) {
+function ItemCard({ item, qty, onAdd, onRemove, imageUrl }) {
   return (
     <div style={{ background: C.card, borderRadius: 12, padding: "12px 14px", border: `1px solid ${C.cardBorder}`, display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8 }}>
-      <div style={{ fontSize: 26, background: "#0A0A0A", borderRadius: 8, width: 50, height: 50, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, border: `1px solid #1E1E1E` }}>{item.emoji}</div>
+      <div style={{ borderRadius: 8, width: 70, height: 70, flexShrink: 0, overflow: "hidden", border: `1px solid #1E1E1E`, background: "#0A0A0A" }}>
+        {imageUrl
+          ? <img src={imageUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28 }}>{item.emoji}</div>
+        }
+      </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center", marginBottom: 2 }}>
           <span style={{ fontWeight: 600, fontSize: 13, color: C.cream, fontFamily: "'Oswald', sans-serif", letterSpacing: "0.04em" }}>{item.name}</span>
@@ -409,6 +432,11 @@ export default function SherellesApp() {
   const [trackerStep, setTrackerStep] = useState(0);
   const [orderNum] = useState(() => Math.floor(10000 + Math.random() * 90000));
   const sqCard = useSquarePayments(step === 2);
+  const [imageMap, setImageMap] = useState({});
+
+  useEffect(() => {
+    squareAPI.fetchCatalogImages().then(imgs => setImageMap(imgs));
+  }, []);
 
   useEffect(() => { squareAPI.connect().then(() => setConnected(true)); }, []);
 
@@ -570,7 +598,7 @@ export default function SherellesApp() {
         </div>
 
         <div style={{ padding: "10px 14px 110px" }}>
-          {MENU[cat].map(item => <ItemCard key={item.id} item={item} qty={cart[item.id] || 0} onAdd={() => upd(item.id, 1)} onRemove={() => upd(item.id, -1)} />)}
+          {MENU[cat].map(item => <ItemCard key={item.id} item={item} qty={cart[item.id] || 0} onAdd={() => upd(item.id, 1)} onRemove={() => upd(item.id, -1)} imageUrl={imageMap[item.name?.toLowerCase().trim()]} />)}
         </div>
 
         {totalItems > 0 && (
