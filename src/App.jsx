@@ -297,13 +297,105 @@ const squareAPI = {
     try {
       const res = await fetch(`${BACKEND}/catalog`);
       const data = await res.json();
-      // Build a name->imageUrl map for matching with our menu
       const imageMap = {};
+
       for (const item of data.items || []) {
         if (item.imageUrl) {
-          imageMap[item.name?.toLowerCase().trim()] = item.imageUrl;
+          const key = item.name?.toLowerCase().trim();
+          const fuzzy = key?.replace(/[^a-z0-9]/g, "");
+
+          // Store under many variations
+          imageMap[key] = item.imageUrl;
+          imageMap[fuzzy] = item.imageUrl;
+          imageMap[key?.substring(0, 25)] = item.imageUrl;
+
+          // Store each individual word for partial matching
+          const words = key?.split(" ") || [];
+          if (words.length >= 2) {
+            imageMap[words.slice(0, 2).join(" ")] = item.imageUrl;
+            imageMap[words.slice(0, 3).join(" ")] = item.imageUrl;
+          }
         }
       }
+
+      // Manual overrides — app name -> exact Square name
+      const ALIASES = {
+        // Strawberry Lemonade
+        "strawberry lemonade (24oz)": "strawberry lemonade",
+        "strawberry lemonade (32oz)": "strawberry lemonade",
+        // Watermelon Limeade
+        "watermelon limeade (24oz)": "watermelon limeade",
+        "watermelon limeade (32oz)": "watermelon limeade",
+        // Cucumber Limeade
+        "cucumber limeade (24oz)": "cucumber limeade",
+        "cucumber limeade (32oz)": "cucumber limeade",
+        // Mac & Cheese — Square only has catering version with photo
+        "mac & cheese (regular 8oz)": "mac and cheese catering",
+        "mac & cheese (large 12oz)": "mac and cheese catering",
+        // Green Beans
+        "green beans (small)": "green beans",
+        "green beans (large)": "green beans",
+        // Red Beans & Rice
+        "red beans & rice (small)": "red beans and rice small",
+        "red beans & rice (large)": "red beans and rice large",
+        // Fries
+        "small fries": "small fries",
+        "large fries": "large fries",
+        // Gizzards
+        "gizzards w/ gravy (half pound)": "gizzard (1/2 pound)",
+        "full pound of gizzards": "full pound of gizzards",
+        "gizzard bowl with gravy": "gizzard combo",
+        // Chicken sandwich
+        "chicken sandwich only": "chicken sandwhich only",
+        "chicken sandwich combo": "chicken sandwhich combo",
+        // Party wings
+        "6-pc party wing only": "6-pc party wing only",
+        "6-piece party wing combo": "6-piece party wing combo",
+        "9-pc party wings only": "9-pc party wings only",
+        "12-piece party wing only": "12-piece party wing only",
+        "12-piece party wing combo": "12-piece party wing combo",
+        "20 piece party wing combo": "20 piece party wing combo",
+        "25 party wings (chicken only)": "25 party wings (chicken only)",
+        // Catering packages
+        "catering package a": "catering package a",
+        "catering package b": "catering package b",
+        "catering package c": "catering package c",
+        // Cakes
+        "blue velvet cake slice": "blue velvet cake slice",
+        "vanilla/vanilla cake slice": "vanilla/vanilla cake slice",
+        "chocolate/chocolate": "chocolate/chocolate",
+        // Corn
+        "cup of corn (small)": "corn on the cob  1 ear",
+        "cup of corn (large)": "corn on the cob  1 ear",
+        // Rolls
+        "roll": "2 legs and roll",
+        "4 rolls": "2 legs and roll",
+        // Legs and rolls
+        "2 legs and roll": "2 legs and roll",
+        // Wings
+        "75 whole wings tray": "75 whole wings tray",
+        "100 party wings": "100 party wings",
+        // Fries tray
+        "full tray fries": "full tray fries",
+        "half tray fries": "half tray fries",
+        // 8 piece special
+        "8 piece leg & thigh special": "8 piece leg & thigh special",
+        // Soda
+        "soda can": "small can of soda",
+        // Kids meals
+        "kids meal — leg": "kids meal leg",
+        "kids meal — tenders": "kids meal tenders",
+      };
+
+      // Apply aliases — if we have a photo for the Square name, map it to our app name too
+      for (const [appName, squareName] of Object.entries(ALIASES)) {
+        const url = imageMap[squareName] || imageMap[squareName?.replace(/[^a-z0-9]/g, "")];
+        if (url && !imageMap[appName]) {
+          imageMap[appName] = url;
+          imageMap[appName.replace(/[^a-z0-9]/g, "")] = url;
+        }
+      }
+
       return imageMap;
     } catch (err) {
       console.error("Catalog fetch error:", err);
@@ -598,7 +690,13 @@ export default function SherellesApp() {
         </div>
 
         <div style={{ padding: "10px 14px 110px" }}>
-          {MENU[cat].map(item => <ItemCard key={item.id} item={item} qty={cart[item.id] || 0} onAdd={() => upd(item.id, 1)} onRemove={() => upd(item.id, -1)} imageUrl={imageMap[item.name?.toLowerCase().trim()]} />)}
+          {MENU[cat].map(item => {
+            const key = item.name?.toLowerCase().trim();
+            const fuzzy = key?.replace(/[^a-z0-9]/g, "");
+            const partial = key?.substring(0, 20);
+            const imageUrl = imageMap[key] || imageMap[fuzzy] || imageMap[partial] || null;
+            return <ItemCard key={item.id} item={item} qty={cart[item.id] || 0} onAdd={() => upd(item.id, 1)} onRemove={() => upd(item.id, -1)} imageUrl={imageUrl} />;
+          })}
         </div>
 
         {totalItems > 0 && (
